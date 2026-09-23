@@ -425,7 +425,7 @@ move_group = moveit_commander.MoveGroupCommander(group_name)
 gripper_client = actionlib.SimpleActionClient(
     '/xarm/xarm_gripper/gripper_action', GripperCommandAction
 )
-gripper_client.wait_for_server()
+gripper_client.wait_for_server(rospy.Duration(5.0))
 
 rospy.sleep(2)
 
