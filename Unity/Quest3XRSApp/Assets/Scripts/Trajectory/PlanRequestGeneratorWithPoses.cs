@@ -21,6 +21,11 @@ public class PlanRequestGeneratorWithPoses : MonoBehaviour
     // new instance variables for inspecting trajectory
     public PrevRecordedTrajectories PrevRecordedTrajectories;
 
+    // Çizilen (istenen) trajectory ile robotun gerçekte izlediği yol
+    // arasındaki sapmayı ölçen bağımsız bileşen. Atanmazsa (null) ölçüm
+    // yapılmaz, mevcut davranış hiç etkilenmez.
+    public TrajectoryAccuracyMeasurer accuracyMeasurer;
+
     // Seyrek liste: sadece her trajectory segmentinin SON noktası.
     // Gerçek robota gönderilecek waypoint listesi bu (SetJointAnglesForRealRobot / training).
     public List<double[]> previousPoints = new List<double[]>();
@@ -55,8 +60,8 @@ public class PlanRequestGeneratorWithPoses : MonoBehaviour
     public GameObject executeOnRealRobotButton;
 
     public TMP_Text debugText;
-    
-    
+
+
     public void GenerateRequest(List<Vector3> poseList, List<Quaternion> orientationList)
     {
         var request = new PlannerServiceRequest();
@@ -73,10 +78,12 @@ public class PlanRequestGeneratorWithPoses : MonoBehaviour
         Quaternion[] orientations = orientationList.ToArray();
 
 
-        if (recordOrientationDropdown.value == 0) {
+        if (recordOrientationDropdown.value == 0)
+        {
             request.input_msg = "down";
         }
-        else if (recordOrientationDropdown.value == 3) {
+        else if (recordOrientationDropdown.value == 3)
+        {
             request.input_msg = "hook";
         }
 
@@ -91,43 +98,71 @@ public class PlanRequestGeneratorWithPoses : MonoBehaviour
         }
         request.pose_list = pose_list;
         TrajectoryPlanner.SendRequest(request);
-    } 
-    
+    }
+
     public void ProcessResponse(PlannerServiceResponse response, bool fromTraining = false)
     {
 
-        if (response.output_msg == "Timeout") {
+        if (response.output_msg == "Timeout")
+        {
             drawService.UpdateDrawingState(true);
         }
-        else {
-            
-            if (fromTraining) {
+        else
+        {
+
+            if (fromTraining)
+            {
                 StartCoroutine(ExecuteTrajectories(response, true));
             }
-            else {
+            else
+            {
                 drawService.UpdateDrawingState();
                 StartCoroutine(ExecuteTrajectories(response));
             }
-            
+
         }
     }
-    
+
     IEnumerator ExecuteTrajectories(PlannerServiceResponse response, bool fromTraining = false)
     {
-        if (fromTraining) {
+        if (fromTraining)
+        {
             previousPoints.Clear();
             previousPointsDense.Clear();
         }
+
+        // Yeni bir execute akışı başlıyor - önceki ölçüm verilerini temizle.
+        // Training akışında (gerçek robota gönderim) doğruluk ölçümü
+        // yapmıyoruz, sadece normal execute'ta.
+        if (!fromTraining && accuracyMeasurer != null)
+        {
+            accuracyMeasurer.BeginMeasurement();
+        }
+
+        // Bu execute akışının hedeflediği çizilmiş noktalar previousPoses'un
+        // EN SONUNA eklenmiş olacak (GenerateRequest'te). previousPoses hiç
+        // temizlenmemiş olsa bile (örn. önceki bir trajectory'den kalıntı
+        // varsa), bu execute'a ait olan kısım her zaman listenin son
+        // response.trajectories.Length kadar elemanı olacaktır. Bu offset
+        // sayesinde poseIndex <-> previousPoses eşleştirmesi index
+        // uyuşmazlığından tamamen bağımsız, her zaman doğru çalışır.
+        int poseListOffset = -1;
+        if (!fromTraining && response.trajectories != null)
+        {
+            poseListOffset = previousPoses.Count - response.trajectories.Length;
+        }
+
         if (response.trajectories != null)
         {
             // For every trajectory plan returned
             for (var poseIndex = 0; poseIndex < response.trajectories.Length; poseIndex++)
-            { 
+            {
                 // For every robot pose in trajectory plan
                 var t = response.trajectories[poseIndex].joint_trajectory.points.Last();
                 foreach (var positions in response.trajectories[poseIndex].joint_trajectory.points)
                 {
-                    if (t == positions) {
+                    if (t == positions)
+                    {
                         previousPoints.Add(HelperFunctions.GetJointAngles(positions));
                     }
 
@@ -139,14 +174,33 @@ public class PlanRequestGeneratorWithPoses : MonoBehaviour
                     yield return new WaitForSeconds(k_JointAssignmentWait);
 
                 }
-            } 
+
+                // Bu segment tam olarak hedeflediği son noktaya ulaştı -
+                // robotun o anki GERÇEK end-effector pozisyonunu, bu
+                // segmentin hedeflediği (çizilen) noktayla karşılaştır.
+                if (!fromTraining && accuracyMeasurer != null && poseListOffset >= 0)
+                {
+                    int targetIndex = poseListOffset + poseIndex;
+                    if (targetIndex >= 0 && targetIndex < previousPoses.Count)
+                    {
+                        accuracyMeasurer.RecordSegmentResult(previousPoses[targetIndex]);
+                    }
+                }
+            }
         }
 
-        if (fromTraining) {
+        if (fromTraining)
+        {
             realRobotCommunication.setJointAngles(previousPoints);
             drawService.trainAndTest.SetAllButtonsInteractable(true);
         }
-        else {
+        else
+        {
+            if (accuracyMeasurer != null)
+            {
+                accuracyMeasurer.FinalizeAndDisplay();
+            }
+
             drawService.UpdateDrawingState();
         }
     }
@@ -160,9 +214,9 @@ public class PlanRequestGeneratorWithPoses : MonoBehaviour
 
     public void GetOnePointBack()
     {
-        
+
         currentIndexPointer = Mathf.Max(currentIndexPointer - stepSize, 0);
-        
+
         nextButton.interactable = true;
         playButton.GetComponent<Button>().interactable = true;
 
@@ -172,10 +226,10 @@ public class PlanRequestGeneratorWithPoses : MonoBehaviour
         }
 
         UpdateSliderHandle();
-            
+
         StartCoroutine(ExecuteTrajectory(previousPointsDense[currentIndexPointer]));
     }
-    
+
     public void GetOnePointNext()
     {
         currentIndexPointer = Mathf.Min(currentIndexPointer + stepSize, previousPointsDense.Count - 1);
@@ -193,7 +247,8 @@ public class PlanRequestGeneratorWithPoses : MonoBehaviour
     }
 
     // coroutine to play the rest of the trajectory
-    IEnumerator PlayRestOfTrajectoryCoroutine() {
+    IEnumerator PlayRestOfTrajectoryCoroutine()
+    {
 
         playButton.SetActive(false);
         pauseButton.SetActive(true);
@@ -201,9 +256,10 @@ public class PlanRequestGeneratorWithPoses : MonoBehaviour
         backButton.interactable = false;
         nextButton.interactable = false;
 
-        for (; currentIndexPointer < previousPointsDense.Count - 1 ; currentIndexPointer++){
+        for (; currentIndexPointer < previousPointsDense.Count - 1; currentIndexPointer++)
+        {
 
-            StartCoroutine(ExecuteTrajectory(previousPointsDense[currentIndexPointer+1]));
+            StartCoroutine(ExecuteTrajectory(previousPointsDense[currentIndexPointer + 1]));
 
             UpdateSliderHandle();
 
@@ -221,12 +277,14 @@ public class PlanRequestGeneratorWithPoses : MonoBehaviour
 
     }
 
-    public void PlayRestOfTrajectory() {
+    public void PlayRestOfTrajectory()
+    {
         StartCoroutine(PlayRestOfTrajectoryCoroutine());
     }
 
-    public void PauseTrajectory() {
-       
+    public void PauseTrajectory()
+    {
+
         // if stopCoroutine(PlayRestOfTrajectoryCoroutine() is called, continues to play the rest of the trajectory, why?
         StopAllCoroutines();
         UpdateSliderHandle();
@@ -234,27 +292,32 @@ public class PlanRequestGeneratorWithPoses : MonoBehaviour
         playButton.SetActive(true);
         pauseButton.SetActive(false);
 
-        if (currentIndexPointer < previousPointsDense.Count - 1) {
+        if (currentIndexPointer < previousPointsDense.Count - 1)
+        {
             playButton.GetComponent<Button>().interactable = true;
             nextButton.interactable = true;
         }
-        else {
+        else
+        {
             playButton.GetComponent<Button>().interactable = false;
         }
         backButton.interactable = true;
     }
 
 
-    public void SetJointAnglesForRealRobot() {
+    public void SetJointAnglesForRealRobot()
+    {
         // Gerçek robota hâlâ seyrek (waypoint) listesi gönderiliyor.
         realRobotCommunication.setJointAngles(previousPoints);
     }
 
     public void ResetGenerator(bool addToTrainingSet = false)
     {
-        if (addToTrainingSet) {
+        if (addToTrainingSet)
+        {
             // store the current trajectory
-            if (previousPoints.Count > 0) {
+            if (previousPoints.Count > 0)
+            {
                 // realRobotCommunication.setJointAngles(previousPoints);
                 PrevRecordedTrajectories.AddTrajectory(previousPoses, previousOrientations);
                 // executeOnRealRobotButton.SetActive(true);
@@ -281,10 +344,11 @@ public class PlanRequestGeneratorWithPoses : MonoBehaviour
     {
         currentIndexPointer = previousPointsDense.Count - 1;
     }
-    
-    private void UpdateSliderHandle() {
+
+    private void UpdateSliderHandle()
+    {
         Vector3 currRectTransform = sliderPosition.GetComponent<RectTransform>().anchoredPosition;
-        currRectTransform.x = 
+        currRectTransform.x =
             (bar.GetComponent<RectTransform>().sizeDelta.x) * (currentIndexPointer / ((float)previousPointsDense.Count - 1)) - bar.GetComponent<RectTransform>().sizeDelta.x / 2;
         sliderPosition.GetComponent<RectTransform>().anchoredPosition = currRectTransform;
     }

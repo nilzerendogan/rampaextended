@@ -5,7 +5,7 @@ using UnityEngine.UI;
 using TMPro;
 using System.Collections.Generic;
 
-public class DrawServiceRealTime: MonoBehaviour
+public class DrawServiceRealTime : MonoBehaviour
 {
     public OVRHand hand;
     public LineRenderer lineRenderer;
@@ -39,12 +39,13 @@ public class DrawServiceRealTime: MonoBehaviour
     private State state;
     // private float threshold = 0.01f;
 
-    private int WAY_POINT_FREQ = 4 ;
+    private int WAY_POINT_FREQ = 4;
 
     public GameObject collisionWarning;
     private bool collisionDetectedinTrajectory = false;
 
     public GameObject collisionIndicatorPrefab;
+    public WorkspaceBoundaryVisualizer workspaceBoundary;
     private List<GameObject> collisionIndicators = new List<GameObject>();
 
     [Header("RAMPA Anti-Drift Configuration")]
@@ -52,11 +53,12 @@ public class DrawServiceRealTime: MonoBehaviour
 
 
 
-// TODO - record hand orientation as well
+    // TODO - record hand orientation as well
 
 
-    private void Start() {
-        
+    private void Start()
+    {
+
         lineRenderer.startWidth = lineWidth;
         lineRenderer.endWidth = lineWidth;
         lineRenderer.material = new Material(Shader.Find("Sprites/Default"));
@@ -79,10 +81,30 @@ public class DrawServiceRealTime: MonoBehaviour
         executeOnRealRobotButton.SetActive(false);
 
         ResetDrawingState();
+
+        // Boundary'i pinch beklemeden baştan göster, kullanıcı çizmeye
+        // başlamadan önce elinin sınıra göre konumunu görebilsin
+        if (workspaceBoundary != null)
+            workspaceBoundary.ShowBoundary();
     }
 
-    public void HandleAddContextButton() {
-        if (!isContextual) {
+    private void Update()
+    {
+        // Elin pozisyonunu pinch durumundan bağımsız her frame güncelle,
+        // böylece boundary çizim başlamadan önce de elin konumunu yansıtır
+        if (workspaceBoundary != null && hand != null)
+        {
+            Vector3 localHandPos = robotBaseTransform != null ?
+                robotBaseTransform.InverseTransformPoint(hand.PointerPose.position) : hand.PointerPose.position;
+
+            workspaceBoundary.UpdateHandPosition(localHandPos);
+        }
+    }
+
+    public void HandleAddContextButton()
+    {
+        if (!isContextual)
+        {
             isContextual = true;
             foreach (var button in contextMenu)
             {
@@ -91,7 +113,8 @@ public class DrawServiceRealTime: MonoBehaviour
             obstacle = Instantiate(contextPrefab, new Vector3(0, 0, 0), Quaternion.identity);
             addContextButton.GetComponentInChildren<TMP_Text>().text = "remove context";
         }
-        else {
+        else
+        {
             isContextual = false;
             Destroy(obstacle);
             foreach (var button in contextMenu)
@@ -102,25 +125,31 @@ public class DrawServiceRealTime: MonoBehaviour
         }
     }
 
-    public void IncXScale() {
+    public void IncXScale()
+    {
         obstacle.transform.localScale += new Vector3(0.02f, 0, 0);
     }
-    public void DecXScale() {
+    public void DecXScale()
+    {
         if (obstacle.transform.localScale.x > 0.03f)
             obstacle.transform.localScale -= new Vector3(0.02f, 0, 0);
-        
+
     }
-    public void IncYScale() {
+    public void IncYScale()
+    {
         obstacle.transform.localScale += new Vector3(0, 0.02f, 0);
     }
-    public void DecYScale() {
+    public void DecYScale()
+    {
         if (obstacle.transform.localScale.y > 0.03f)
             obstacle.transform.localScale -= new Vector3(0, 0.02f, 0);
     }
-    public void IncZScale() {
+    public void IncZScale()
+    {
         obstacle.transform.localScale += new Vector3(0, 0, 0.02f);
     }
-    public void DecZScale() {
+    public void DecZScale()
+    {
         if (obstacle.transform.localScale.z > 0.03f)
             obstacle.transform.localScale -= new Vector3(0, 0, 0.02f);
     }
@@ -182,7 +211,7 @@ public class DrawServiceRealTime: MonoBehaviour
                         Quaternion localOrientation = robotBaseTransform != null ?
                             Quaternion.Inverse(robotBaseTransform.rotation) * worldOrientation : worldOrientation;
 
-                        double[] poseInfo = {localHandPos.x, localHandPos.y, localHandPos.z, localOrientation.x, localOrientation.y, localOrientation.z, localOrientation.w};
+                        double[] poseInfo = { localHandPos.x, localHandPos.y, localHandPos.z, localOrientation.x, localOrientation.y, localOrientation.z, localOrientation.w };
                         planRequestGeneratorRealTime.AddRequestToQueue(poseInfo);
                     }
                     else
@@ -192,7 +221,7 @@ public class DrawServiceRealTime: MonoBehaviour
                         Quaternion localOrientation = robotBaseTransform != null ?
                             Quaternion.Inverse(robotBaseTransform.rotation) * worldOrientation : worldOrientation;
 
-                        double[] poseInfo = {localHandPos.x, localHandPos.y, localHandPos.z, localOrientation.x, localOrientation.y, localOrientation.z, localOrientation.w};
+                        double[] poseInfo = { localHandPos.x, localHandPos.y, localHandPos.z, localOrientation.x, localOrientation.y, localOrientation.z, localOrientation.w };
                         planRequestGeneratorRealTime.AddRequestToQueue(poseInfo);
                     }
                 }
@@ -205,7 +234,7 @@ public class DrawServiceRealTime: MonoBehaviour
             yield return new WaitForSeconds(interval);
         }
     }
-    
+
     public void UpdateDrawingState(bool finalized = false)
     {
         switch (state)
@@ -213,31 +242,33 @@ public class DrawServiceRealTime: MonoBehaviour
             case State.Initial:
                 state = State.DrawTrajectory;
                 lineRenderer.positionCount = 0;
-                
+
                 handleMenu(true);
                 foreach (var button in contextMenu)
                 {
                     button.interactable = false;
                 }
                 executeOnRealRobotButton.SetActive(false);
-            
+
                 StartCoroutine(DrawTrajectory(0.05f));
                 break;
 
             case State.DrawTrajectory:
-                if (finalized) {
+                if (finalized)
+                {
                     loadingText.GetComponent<TMP_Text>().text = "no solution found";
                     ResetDrawingState(true);
                 }
-                else {
+                else
+                {
                     state = State.InspectTrajectory;
                     planRequestGeneratorRealTime.SetJointAnglesForRealRobot();
                     executeOnRealRobotButton.SetActive(true);
                     planRequestGeneratorRealTime.SetCurrentIndexPointer();
                     handleMenu(false);
                 }
-                
-                
+
+
                 break;
             case State.InspectTrajectory:
                 if (finalized)
@@ -250,7 +281,7 @@ public class DrawServiceRealTime: MonoBehaviour
 
                     // enters here when the user clicks on "redraw from current waypoint" button
                     state = State.DrawTrajectory;
-                    
+
                     handleMenu(true);
                     redrawButton.interactable = false;
 
@@ -278,12 +309,12 @@ public class DrawServiceRealTime: MonoBehaviour
                             planRequestGeneratorRealTime.currentIndexPointer);
 
                     StartCoroutine(DrawTrajectory(0.05f));
-                    
+
                 }
 
                 break;
         }
-        
+
     }
 
 
@@ -296,9 +327,11 @@ public class DrawServiceRealTime: MonoBehaviour
 
         collisionDetectedinTrajectory = false;
         collisionWarning.SetActive(false);
-        
-        if (!anotherTrajectory) {
-            if (isContextual) {
+
+        if (!anotherTrajectory)
+        {
+            if (isContextual)
+            {
                 Destroy(obstacle);
             }
             foreach (var button in contextMenu)
@@ -308,7 +341,7 @@ public class DrawServiceRealTime: MonoBehaviour
             isContextual = false;
             addContextButton.GetComponentInChildren<TMP_Text>().text = "add context";
         }
-        
+
 
         StopAllCoroutines();
 
@@ -321,8 +354,8 @@ public class DrawServiceRealTime: MonoBehaviour
         addToTrainingButton.interactable = false;
         planRequestGeneratorRealTime.PrevRecordedTrajectories.SetInteractable(true);
         addContextButton.interactable = true;
-        
-        
+
+
 
 
         // also reset the slider handle position to middle
@@ -335,7 +368,7 @@ public class DrawServiceRealTime: MonoBehaviour
     {
         if (isContextual)
             trainAndTest.SendTrainingData(planRequestGeneratorRealTime.previousPoses, planRequestGeneratorRealTime.previousOrientations, obstacle.transform.localScale.y);
-        else 
+        else
             trainAndTest.SendTrainingData(planRequestGeneratorRealTime.previousPoses, planRequestGeneratorRealTime.previousOrientations);
         planRequestGeneratorRealTime.ResetGenerator(true);
         UpdateDrawingState(true);
@@ -352,31 +385,34 @@ public class DrawServiceRealTime: MonoBehaviour
     private void handleMenu(bool loading)
     {
 
-        if (collisionDetectedinTrajectory) {
+        if (collisionDetectedinTrajectory)
+        {
             collisionWarning.SetActive(true);
         }
         bar.SetActive(!loading);
         loadingText.SetActive(loading);
         planRequestGeneratorRealTime.PrevRecordedTrajectories.SetInteractable(!loading);
-        
+
         redrawButton.interactable = !loading;
         backButton.interactable = !loading;
         addToTrainingButton.interactable = !loading;
 
-        
 
-        if (!loading) {
+
+        if (!loading)
+        {
             // set slider position to end of bar
             Vector3 currRectTransform = sliderPosition.GetComponent<RectTransform>().anchoredPosition;
             currRectTransform.x = bar.GetComponent<RectTransform>().sizeDelta.x / 2;
             sliderPosition.GetComponent<RectTransform>().anchoredPosition = currRectTransform;
         }
-    
+
     }
 
     public void SetCollisionDetected(Vector3 contactPoint)
     {
-        if (state == State.DrawTrajectory) {
+        if (state == State.DrawTrajectory)
+        {
             collisionDetectedinTrajectory = true;
         }
         GameObject collisionIndicator = Instantiate(collisionIndicatorPrefab, contactPoint, Quaternion.identity);

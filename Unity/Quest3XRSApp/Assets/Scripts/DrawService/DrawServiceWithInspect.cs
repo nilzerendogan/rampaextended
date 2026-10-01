@@ -54,6 +54,15 @@ public class DrawServiceWithInspect : MonoBehaviour
     [Header("RAMPA Anti-Drift Configuration")]
     public Transform robotBaseTransform; // Unity Hierarchy'deki link_base buraya sürüklenecek
 
+    [Header("Mid-Draw Restart")]
+    // Çizim ekranında (pinch to start drawing / drawing trajectory) görünen,
+    // ana menüye dönmeden trajectory'i anında sıfırlayıp yeniden çizime
+    // başlatan buton. Sadece normal (inspect) modda kullanılır.
+    public GameObject restartDrawingButton;
+
+    [Header("Workspace Boundary")]
+    public WorkspaceBoundaryVisualizer workspaceBoundary;
+
     // Start is called before the first frame update
     void Start()
     {
@@ -80,7 +89,28 @@ public class DrawServiceWithInspect : MonoBehaviour
         trajectorySamplePoints_point1 = new Vector3(0, 0, 0);
         trajectorySamplePoints_point2 = new Vector3(0, 0, 0);
 
+        if (restartDrawingButton != null)
+            restartDrawingButton.SetActive(false);
+
         ResetDrawingState();
+
+        // Boundary'i pinch beklemeden baştan göster, kullanıcı çizmeye
+        // başlamadan önce elinin sınıra göre konumunu görebilsin
+        if (workspaceBoundary != null)
+            workspaceBoundary.ShowBoundary();
+    }
+
+    private void Update()
+    {
+        // Elin pozisyonunu pinch durumundan bağımsız her frame güncelle,
+        // böylece boundary çizim başlamadan önce de elin konumunu yansıtır
+        if (workspaceBoundary != null && hand != null)
+        {
+            Vector3 localHandPos = robotBaseTransform != null ?
+                robotBaseTransform.InverseTransformPoint(hand.PointerPose.position) : hand.PointerPose.position;
+
+            workspaceBoundary.UpdateHandPosition(localHandPos);
+        }
     }
 
     public void HandleAddContextButton()
@@ -265,6 +295,9 @@ public class DrawServiceWithInspect : MonoBehaviour
                 executeOnRealRobotButton.SetActive(false);
                 executeButton.SetActive(true);
 
+                if (restartDrawingButton != null)
+                    restartDrawingButton.SetActive(true);
+
                 StartCoroutine(DrawTrajectory(0.05f));
                 break;
 
@@ -274,6 +307,8 @@ public class DrawServiceWithInspect : MonoBehaviour
                 executeButton.GetComponent<Button>().interactable = true;
                 PlanRequestGeneratorWithPoses.PrevRecordedTrajectories.SetInteractable(true);
                 loadingText.GetComponent<TMP_Text>().text = "trajectory recorded";
+                // Restart butonu burada da görünür kalır - kullanıcı execute
+                // etmeden önce trajectory'i beğenmezse tekrar çizebilsin
                 break;
 
             case State.WaitingForExecution:
@@ -281,6 +316,12 @@ public class DrawServiceWithInspect : MonoBehaviour
                 state = State.WaitingForResponse;
                 executeButton.GetComponent<Button>().interactable = false;
                 loadingText.GetComponent<TMP_Text>().text = "waiting for response";
+
+                // Execute tetiklendiğinde artık restart'a gerek yok - gerçek
+                // execute süreci başladı, geri dönüş anlamsız olur
+                if (restartDrawingButton != null)
+                    restartDrawingButton.SetActive(false);
+
                 TriggerPublishMethod();
                 break;
 
@@ -324,6 +365,9 @@ public class DrawServiceWithInspect : MonoBehaviour
                     handleMenu(true);
                     redrawButton.interactable = false;
 
+                    if (restartDrawingButton != null)
+                        restartDrawingButton.SetActive(true);
+
                     // update line renderer
 
                     double rate = ((double)PlanRequestGeneratorWithPoses.currentIndexPointer) / (double)PlanRequestGeneratorWithPoses.previousPoints.Count;
@@ -354,6 +398,41 @@ public class DrawServiceWithInspect : MonoBehaviour
 
     }
 
+    // Çizim ekranındayken (DrawTrajectory) veya trajectory tamamlanıp execute
+    // beklenirken (WaitingForExecution) çağrılır - ana menüye dönmeden mevcut
+    // trajectory'i tamamen atıp anında yeniden çizime başlar
+    public void RestartDrawing()
+    {
+        if (state != State.DrawTrajectory && state != State.WaitingForExecution)
+            return;
+
+        StopAllCoroutines();
+
+        targetPoints.Clear();
+        targetOrientations.Clear();
+
+        lineRenderer.positionCount = 0;
+
+        trajectorySamplePoints_point1 = Vector3.zero;
+        trajectorySamplePoints_point2 = Vector3.zero;
+
+        collisionDetectedinTrajectory = false;
+        collisionWarning.SetActive(false);
+
+        ClearCollisionIndicators();
+
+        handOrientation.ShowIndicator(false);
+        handOrientation.ResetFilter();
+
+        executeButton.SetActive(true);
+        executeButton.GetComponent<Button>().interactable = false;
+
+        // state'i Initial'e çekip UpdateDrawingState çağırmak, çizimi
+        // sıfırdan başlatan coroutine'i temiz bir şekilde tekrar tetikler
+        state = State.Initial;
+        UpdateDrawingState();
+    }
+
     public void ResetDrawingState(bool anotherTrajectory = false)
     {
 
@@ -377,6 +456,9 @@ public class DrawServiceWithInspect : MonoBehaviour
 
         collisionDetectedinTrajectory = false;
         collisionWarning.SetActive(false);
+
+        if (restartDrawingButton != null)
+            restartDrawingButton.SetActive(false);
 
         handOrientation.ResetFilter();
 
